@@ -37,35 +37,58 @@ object Updater {
     fun currentName(c: Context): String =
         c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: "?"
 
-    /** 读取最新发布版本。标签格式 v1.0.N，N 就是版本号 */
-    fun latest(): ReleaseInfo? {
-        val c = URL(UpdateConfig.API).openConnection() as HttpURLConnection
-        val text = try {
+    private fun getText(url: String): String {
+        val c = URL(url).openConnection() as HttpURLConnection
+        try {
             c.connectTimeout = 10000
             c.readTimeout = 15000
             c.useCaches = false
+            c.instanceFollowRedirects = true
             c.setRequestProperty("User-Agent", "CaipiaoHelper")
             c.setRequestProperty("Accept", "application/vnd.github+json")
             if (c.responseCode != 200) throw IOException("HTTP ${c.responseCode}")
-            c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            return c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         } finally {
             c.disconnect()
         }
-        val j = JSONObject(text)
+    }
+
+    /**
+     * 读取最新发布版本。内部编号从 Releases 里的 version.json 读取
+     * （显示的版本号如 1.1.0 不能直接比大小）；旧版本没有这个文件时按标签最后一位读取。
+     */
+    fun latest(): ReleaseInfo? {
+        val j = JSONObject(getText(UpdateConfig.API))
         val tag = j.optString("tag_name")
-        if (!Regex("v\\d+\\.\\d+\\.\\d+").matches(tag)) return null
-        val code = tag.substringAfterLast('.').toLongOrNull() ?: return null
         val assets = j.optJSONArray("assets") ?: return null
+        var apkUrl: String? = null
+        var apkSize = -1L
+        var verUrl: String? = null
         for (i in 0 until assets.length()) {
             val a = assets.getJSONObject(i)
-            if (a.optString("name") == UpdateConfig.APK_NAME) {
-                return ReleaseInfo(
-                    code, tag.removePrefix("v"), j.optString("body"),
-                    a.optString("browser_download_url"), a.optLong("size", -1)
-                )
+            when (a.optString("name")) {
+                UpdateConfig.APK_NAME -> {
+                    apkUrl = a.optString("browser_download_url")
+                    apkSize = a.optLong("size", -1)
+                }
+                "version.json" -> verUrl = a.optString("browser_download_url")
             }
         }
-        return null
+        val url = apkUrl ?: return null
+        var code: Long? = null
+        var name = tag.removePrefix("v")
+        if (verUrl != null) {
+            try {
+                val v = JSONObject(getText(verUrl))
+                code = v.optLong("code", -1L).takeIf { it > 0 }
+                v.optString("name").takeIf { it.isNotBlank() }?.let { name = it }
+            } catch (e: Exception) { }
+        }
+        if (code == null) {
+            if (!Regex("v\\d+\\.\\d+\\.\\d+").matches(tag)) return null
+            code = tag.substringAfterLast('.').toLongOrNull() ?: return null
+        }
+        return ReleaseInfo(code, name, j.optString("body"), url, apkSize)
     }
 
     fun download(c: Context, info: ReleaseInfo, progress: (Int) -> Unit): File {
