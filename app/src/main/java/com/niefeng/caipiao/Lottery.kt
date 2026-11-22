@@ -105,6 +105,17 @@ object Clock {
         }
     }
 
+    /** 今天（北京时间）某个时刻，例如 "21:15" */
+    fun todayAt(hm: String): Long {
+        val p = hm.split(":")
+        val c = Calendar.getInstance(tz)
+        c.set(Calendar.HOUR_OF_DAY, p[0].toInt())
+        c.set(Calendar.MINUTE, p[1].toInt())
+        c.set(Calendar.SECOND, 0)
+        c.set(Calendar.MILLISECOND, 0)
+        return c.timeInMillis
+    }
+
     /** 例如 "11月21日 21:16:46" */
     fun fmtFull(ms: Long): String {
         val f = SimpleDateFormat("M月d日 HH:mm:ss", Locale.CHINA)
