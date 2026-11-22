@@ -106,6 +106,8 @@ class LatestScreen(private val a: MainActivity) : Screen {
                     val si = try { fs.get() } catch (e: Exception) { null }
                     val s = si?.draw
                     val n = try { fn.get() } catch (e: Exception) { null }
+                    // 本机历史数据里已有的最新一期（用来判断看到的是不是今晚的新一期）
+                    val storeMax = try { store.read(g, Clock.year()).firstOrNull()?.issue } catch (e: Exception) { null }
                     val st = decide(s, n)
                     if (st is CardState.Verified) {
                         try { store.merge(g, st.draw) } catch (e: Exception) { }
@@ -120,7 +122,9 @@ class LatestScreen(private val a: MainActivity) : Screen {
                         }
                         var updated: String? = null
                         if (shown != null) {
-                            val seen = noteIssue(card, shown.issue, doneAt)
+                            val olderKnown = (si != null && si.draw.issue < shown.issue) ||
+                                (storeMax != null && storeMax < shown.issue)
+                            val seen = noteIssue(card, shown.issue, doneAt, olderKnown)
                             val sinaT = if (si != null && si.draw.issue == shown.issue) si.createTime else null
                             updated = listOfNotNull(seen, sinaT).minOrNull()?.let { Clock.fmtFull(it) }
                         }
@@ -140,14 +144,20 @@ class LatestScreen(private val a: MainActivity) : Screen {
     }
 
     /**
-     * 记录 App 亲眼看到新一期出现的时间：只有本次打开期间先看到上一期、
-     * 后来变成新一期时才记录（这样不会把"打开 App 的时间"当成更新时间）。
+     * 记录这一期号码出现的时间（例如网易 21:15:40 出了号码，就记 21:15:40）：
+     * 1. App 开着时看到号码从上一期变成新一期：记下那一刻（误差 10 秒内）
+     * 2. 开奖当晚（开奖时间 ~ 22:30）打开 App 时，新一期已经出来了：记下第一次看到的时间
+     * 第二天或其他时间打开 App，不会把打开 App 的时间当成更新时间。
+     * 记录后保存在平板上，以后打开也一样显示。
      */
-    private fun noteIssue(card: GameCard, issue: String, t: Long): Long? {
+    private fun noteIssue(card: GameCard, issue: String, t: Long, olderKnown: Boolean): Long? {
         val key = card.game.name + "_" + issue
         val last = card.lastIssue
-        if (last != null && issue > last && !prefs.contains(key)) {
-            prefs.edit().putLong(key, t).apply()
+        if (!prefs.contains(key)) {
+            val watched = last != null && issue > last
+            val tonight = last == null && olderKnown && Clock.isHot() &&
+                t >= Clock.todayAt(card.game.drawTime)
+            if (watched || tonight) prefs.edit().putLong(key, t).apply()
         }
         if (last == null || issue > last) card.lastIssue = issue
         val v = prefs.getLong(key, 0L)
