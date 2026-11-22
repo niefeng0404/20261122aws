@@ -26,13 +26,17 @@ class MainActivity : Activity() {
     private lateinit var root: FrameLayout
     private var current: Screen? = null
     private val screens = HashMap<String, Screen>()
+    lateinit var updater: UpdateUi
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         root = FrameLayout(this)
         root.setBackgroundColor(Ui.BG)
         setContentView(root)
+        updater = UpdateUi(this)
         show("home")
+        // 打开 App 时自动检查一次更新（没有新版本时不打扰）
+        updater.check(manual = false)
     }
 
     private fun isLandscape(): Boolean =
@@ -75,6 +79,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         current?.onShow()
+        if (::updater.isInitialized) updater.onResume()
     }
 
     override fun onPause() {
@@ -108,6 +113,20 @@ class HomeScreen(private val a: MainActivity) : Screen {
         buttons.addView(Ui.bigButton(a, "开奖直播", Ui.ORANGE, 52f) { a.show("live") })
         buttons.addView(Ui.bigButton(a, "历史数据", Ui.TC_BLUE, 52f) { a.show("history") })
         root.addView(buttons, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        // 底部：版本号 + 检查更新
+        val bottom = Ui.horizontal(a)
+        bottom.gravity = Gravity.CENTER
+        bottom.setPadding(0, Ui.dp(a, 12f), 0, 0)
+        val ver = Ui.text(a, "当前版本 ${Updater.currentName(a)}", 28f, Ui.GRAY)
+        ver.setPadding(0, 0, Ui.dp(a, 24f), 0)
+        bottom.addView(ver)
+        val upd = Ui.bigButton(a, "检查更新", Ui.GREEN, 30f) { a.updater.check(manual = true) }
+        val up = Ui.dp(a, 14f)
+        upd.setPadding(up * 2, up, up * 2, up)
+        bottom.addView(upd)
+        root.addView(bottom, LinearLayout.LayoutParams(-1, -2))
+        a.updater.onStatus = { s -> ver.text = s }
     }
 
     override fun onOrientation(landscape: Boolean) {
