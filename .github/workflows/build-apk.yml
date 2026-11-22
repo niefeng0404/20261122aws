@@ -31,6 +31,20 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: 计算版本号（每位 0-9，满 10 进位：1.0.9 → 1.1.0）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LAST=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null || true)
+          if [[ "$LAST" =~ ^v([0-9])\.([0-9])\.([0-9])$ ]]; then
+            N=$(( BASH_REMATCH[1]*100 + BASH_REMATCH[2]*10 + BASH_REMATCH[3] + 1 ))
+          else
+            N=110
+          fi
+          NAME="$(( N / 100 )).$(( N / 10 % 10 )).$(( N % 10 ))"
+          echo "上一个版本：$LAST  新版本：$NAME"
+          echo "VERSION_NAME=$NAME" >> "$GITHUB_ENV"
+
       - name: 准备签名密钥
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -49,15 +63,20 @@ jobs:
         run: gradle assembleRelease --no-daemon --stacktrace
 
       - name: 整理文件
-        run: cp app/build/outputs/apk/release/app-release.apk caipiao-helper.apk
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk caipiao-helper.apk
+          echo "{\"code\": $VERSION_CODE, \"name\": \"$VERSION_NAME\"}" > version.json
+          cat version.json
 
       - name: 发布到 Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: 福彩体彩助手 1.0.${{ github.run_number }}
+          tag_name: v${{ env.VERSION_NAME }}
+          name: 福彩体彩助手 ${{ env.VERSION_NAME }}
           body: ${{ github.event.head_commit.message || '手动发布' }}
-          files: caipiao-helper.apk
+          files: |
+            caipiao-helper.apk
+            version.json
           make_latest: true
 
       - name: 同时保存一份到 Artifacts
