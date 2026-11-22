@@ -28,11 +28,16 @@ object Http {
     }
 }
 
+class SinaLatest(val draw: Draw, val createTime: Long?, val nextOpen: Long?)
+
 /** 新浪彩票 */
 object SinaSource {
     const val NAME = "新浪"
 
-    fun latest(game: Game): Draw? {
+    fun latest(game: Game): Draw? = latestInfo(game)?.draw
+
+    /** 最新一期 + 新浪首次收录时间（createTime）+ 下一期开奖时间（nextOpenTime） */
+    fun latestInfo(game: Game): SinaLatest? {
         val url = "https://mix.lottery.sina.com.cn/gateway/index/entry?format=json&__caller__=web" +
             "&__version__=1&__verno__=1&cat1=gameOpenInfo&lottoType=${game.sinaType}" +
             "&_t=${System.currentTimeMillis()}"
@@ -43,7 +48,8 @@ object SinaSource {
         val issue = Issue.normalize(data.optString("issueNo")) ?: return null
         val arr = data.optJSONArray("openResults") ?: return null
         val nums = (0 until arr.length()).map { arr.optString(it) }
-        return Draw.of(issue, nums, game)
+        val draw = Draw.of(issue, nums, game) ?: return null
+        return SinaLatest(draw, Clock.parse(data.optString("createTime")), Clock.parse(data.optString("nextOpenTime")))
     }
 
     /** 按年份获取历史开奖（新浪走势图页面），每行再与"奖号"列自我核对 */
