@@ -13,11 +13,15 @@ import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** 最新开奖：同时查新浪和网易，开奖时段每 10 秒刷新 */
+/**
+ * 最新开奖：同时查新浪和网易，开奖时段每 10 秒刷新，其他时间每 1 分钟刷新。
+ * 某个彩种最新一期两家核对一致后，暂停刷新，等到下一期开奖时间再自动恢复。
+ */
 class LatestScreen(private val a: MainActivity) : Screen {
     private val handler = Handler(Looper.getMainLooper())
     private val net = Executors.newCachedThreadPool()
     private val store = HistoryStore(a)
+    private val prefs = a.getSharedPreferences("first_seen", Context.MODE_PRIVATE)
     private val cards = Game.values().map { GameCard(a, it) }
     private val hint = Ui.text(a, "", 24f, Ui.GRAY, false)
     private val root = Ui.vertical(a)
@@ -75,32 +79,79 @@ class LatestScreen(private val a: MainActivity) : Screen {
         net.shutdownNow()
     }
 
+    private fun updateHint() {
+        val now = System.currentTimeMillis()
+        if (cards.all { it.pausedUntil > now }) {
+            val next = cards.minOf { it.pausedUntil }
+            hint.text = "✅ 最新一期都已核对，暂停刷新，${Clock.fmtHm(next)} 开奖时自动恢复"
+        } else {
+            hint.text = if (Clock.isHot()) "开奖时段：每 10 秒自动刷新"
+            else "每 1 分钟自动刷新（每晚 21:12 起改为每 10 秒）"
+        }
+    }
+
     private fun refreshAll() {
-        hint.text = if (Clock.isHot()) "开奖时段：每 10 秒自动刷新"
-        else "每 1 分钟自动刷新（每晚 21:12 起改为每 10 秒）"
+        val now = System.currentTimeMillis()
         for (card in cards) {
+            // 已核对一致且还没到下一期开奖时间：不再刷新
+            if (card.pausedUntil > now) continue
             if (!card.busy.compareAndSet(false, true)) continue
             val g = card.game
             try {
-                val fs = net.submit(Callable<Draw?> { fetch { SinaSource.latest(g) } })
+                val fs = net.submit(Callable<SinaLatest?> {
+                    try { SinaSource.latestInfo(g) } catch (e: Exception) { null }
+                })
                 val fn = net.submit(Callable<Draw?> { fetch { NeteaseSource.latest(g) } })
                 net.execute {
-                    val s = try { fs.get() } catch (e: Exception) { null }
+                    val si = try { fs.get() } catch (e: Exception) { null }
+                    val s = si?.draw
                     val n = try { fn.get() } catch (e: Exception) { null }
                     val st = decide(s, n)
                     if (st is CardState.Verified) {
                         try { store.merge(g, st.draw) } catch (e: Exception) { }
                     }
                     val at = Clock.now()
+                    val doneAt = System.currentTimeMillis()
                     handler.post {
-                        card.render(st, at)
+                        val shown: Draw? = when (st) {
+                            is CardState.Verified -> st.draw
+                            is CardState.Pending -> st.draw
+                            else -> null
+                        }
+                        var updated: String? = null
+                        if (shown != null) {
+                            val seen = noteIssue(card, shown.issue, doneAt)
+                            val sinaT = if (si != null && si.draw.issue == shown.issue) si.createTime else null
+                            updated = listOfNotNull(seen, sinaT).minOrNull()?.let { Clock.fmtFull(it) }
+                        }
+                        val next = si?.nextOpen
+                        card.pausedUntil =
+                            if (st is CardState.Verified && next != null && doneAt < next) next else 0L
+                        card.render(st, at, updated)
                         card.busy.set(false)
+                        updateHint()
                     }
                 }
             } catch (e: Exception) {
                 card.busy.set(false)
             }
         }
+        updateHint()
+    }
+
+    /**
+     * 记录 App 亲眼看到新一期出现的时间：只有本次打开期间先看到上一期、
+     * 后来变成新一期时才记录（这样不会把"打开 App 的时间"当成更新时间）。
+     */
+    private fun noteIssue(card: GameCard, issue: String, t: Long): Long? {
+        val key = card.game.name + "_" + issue
+        val last = card.lastIssue
+        if (last != null && issue > last && !prefs.contains(key)) {
+            prefs.edit().putLong(key, t).apply()
+        }
+        if (last == null || issue > last) card.lastIssue = issue
+        val v = prefs.getLong(key, 0L)
+        return if (v > 0L) v else null
     }
 
     private fun fetch(block: () -> Draw?): Draw? = try { block() } catch (e: Exception) { null }
@@ -108,6 +159,10 @@ class LatestScreen(private val a: MainActivity) : Screen {
 
 class GameCard(private val c: Context, val game: Game) {
     val busy = AtomicBoolean(false)
+    /** 暂停刷新到这个时间（下一期开奖时间），0 表示正常刷新 */
+    var pausedUntil = 0L
+    /** 本次打开期间看到过的最新期号 */
+    var lastIssue: String? = null
     val view = LinearLayout(c)
     private val color = if (game.isFc) Ui.FC_RED else Ui.TC_BLUE
     private val info = Ui.vertical(c)
@@ -166,17 +221,19 @@ class GameCard(private val c: Context, val game: Game) {
         status.setTextColor(col)
     }
 
-    fun render(st: CardState, at: String) {
+    /** updated：这一期最早出现的时间（新浪首次收录时间 / App 亲眼看到的时间，取更早的） */
+    fun render(st: CardState, at: String, updated: String?) {
+        val upd = if (updated != null) "  更新时间 $updated" else ""
         when (st) {
             is CardState.Verified -> {
                 showDraw(st.draw)
                 setStatus("✅ 新浪、网易 两家核对一致", Ui.GREEN)
-                meta.text = "来源：新浪 + 网易　　获取时间 $at"
+                meta.text = "来源：新浪 + 网易$upd"
             }
             is CardState.Pending -> {
                 showDraw(st.draw)
                 setStatus("⏳ 待核对（目前只有${st.source}出了号码）", Ui.ORANGE)
-                meta.text = "来源：${st.source}　　获取时间 $at"
+                meta.text = "来源：${st.source}$upd"
             }
             is CardState.Conflict -> {
                 issueText.text = "第 ${st.issue} 期"
