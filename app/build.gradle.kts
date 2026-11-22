@@ -3,8 +3,10 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// 版本号由 GitHub 自动打包时传入（每次打包自动加 1）
+// 版本号由 GitHub 自动打包时传入：
+// VERSION_CODE 内部编号，每次自动加 1；VERSION_NAME 显示的版本，每位只用 0-9（1.0.9 → 1.1.0）
 val buildNumber = (System.getenv("VERSION_CODE") ?: "1").toInt()
+val buildName = System.getenv("VERSION_NAME") ?: "1.0.$buildNumber"
 val keystoreFile: String? = System.getenv("KEYSTORE_FILE")
 
 android {
@@ -16,7 +18,7 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = buildNumber
-        versionName = "1.0.$buildNumber"
+        versionName = buildName
     }
 
     // 固定签名：每次更新都用同一把密钥，平板才能直接覆盖安装
@@ -48,11 +50,6 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
-    }
-
-    lint {
-        checkReleaseBuilds = false
-        abortOnError = false
     }
 }
 
