@@ -28,7 +28,7 @@ import androidx.core.widget.TextViewCompat
 object LiveConfig {
     const val FC_URL = "https://www.cwl.gov.cn/ygkj/kjzb/"
     const val FC_HOME = "https://www.cwl.gov.cn/"
-    const val TC_URL = "https://www.lottery.gov.cn/kj/kjzb.html"
+    const val TC_URL = "https://www.lottery.gov.cn/xytc/index.html"
     const val TC_HOME = "https://www.lottery.gov.cn/"
 
     /** 只允许打开这些官方网站 */
@@ -38,88 +38,67 @@ object LiveConfig {
 }
 
 /**
- * 注入官方页面的脚本：自动找到直播画面（视频 / 播放器 / 直播倒计时海报），
- * 把它放大铺满，页面上其他内容全部隐藏。页面变化时每 1.5 秒自动重新检查。
+ * 注入官方页面的脚本（已在官网实测）：
+ * 福彩：直播时保留 #divVideoContainer（直播视频），直播前保留 #divVideoCover（海报 + 倒计时）
+ * 体彩：直播时保留 #liveVideo（直播视频），平时保留 #picture（开奖视频画面）
+ * 其他内容全部隐藏，画面按比例放大铺满。官网切换画面时每 1 秒自动跟着切换。
  */
 object LiveJs {
     val ISOLATE = """
 (function(){
   if (window.__qwIso) { window.__qwIso.run(); return; }
-  var S = {keep:null, w:1, h:1};
+  var S = {keep:null, w:1, h:1, reported:false, blocked:false};
+  var H = location.hostname;
+  var CAND = H.indexOf('cwl.gov.cn')>=0 ? ['divVideoContainer','divVideoCover']
+           : H.indexOf('lottery.gov.cn')>=0 ? ['liveVideo','picture1','divBlock','picture'] : [];
   function rect(e){ return e.getBoundingClientRect(); }
-  function all(sel){ return Array.prototype.slice.call(document.querySelectorAll(sel)); }
-  function vis(e){ var r=rect(e); if(r.width<2||r.height<2) return false; var cs=getComputedStyle(e); return cs.display!=='none' && cs.visibility!=='hidden'; }
-  function vw(){ return document.documentElement.clientWidth || window.innerWidth || 1; }
-  function okSize(e){ var r=rect(e), W=vw(); return r.width>=W*0.45 && r.height>=90 && r.width<=W*1.05+4 && r.height<=Math.max(window.innerHeight*1.3,500); }
-  function best(list){ var b=null, ba=0; for (var i=0;i<list.length;i++){ var e=list[i]; if(!vis(e)||!okSize(e)) continue; var r=rect(e), a=r.width*r.height; if(a>ba){ ba=a; b=e; } } return b; }
-  function byText(re){
-    if(!document.body) return null;
-    var w=document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null), n;
-    while((n=w.nextNode())){ if(re.test(n.nodeValue)){ var e=n.parentElement; while(e && e!==document.body){ if(vis(e)&&okSize(e)) return e; e=e.parentElement; } } }
+  function shown(e){ if(!e||!e.isConnected) return false; var cs=getComputedStyle(e); if(cs.display==='none'||cs.visibility==='hidden') return false; var r=rect(e); return r.width>40 && r.height>40; }
+  function natural(e){ var cs=getComputedStyle(e); return cs.display!=='none'; }
+  function target(){
+    for (var i=0;i<CAND.length;i++){ var e=document.getElementById(CAND[i]); if(e && natural(e)) return e; }
     return null;
   }
-  function pick(){
-    var v=best(all('video')); if(v) return v;
-    var f=best(all('iframe')); if(f) return f;
-    var t=byText(/距离直播|直播倒计时|即将开始/); if(t) return t;
-    var re=/video|player|live|zhibo|kjzb|poster|countdown/i;
-    return best(all('div,section,img,canvas,a').filter(function(e){ var c=(typeof e.className==='string')?e.className:''; return re.test((e.id||'')+' '+c); }));
-  }
-  function grow(e){
-    var r=rect(e), cur=e;
-    while(cur.parentElement && cur.parentElement!==document.body && cur.parentElement!==document.documentElement){
-      var pr=rect(cur.parentElement);
-      if(pr.height<=r.height*1.08+12 && pr.width<=r.width*1.1+24) cur=cur.parentElement; else break;
-    }
-    return cur;
-  }
-  function findTitle(k){
-    var kr=rect(k), bestEl=null, bestD=1e9;
-    all('h1,h2,h3,h4,h5,p,span,div').forEach(function(e){
-      if(k.contains(e) || e.contains(k) || !vis(e)) return;
-      var t=(e.innerText||'').trim();
-      if(t.length<4 || t.length>60 || !/\d{4}[-年.\/]\d{1,2}/.test(t)) return;
-      if(e.children.length>3) return;
-      var r=rect(e), d=kr.top-r.bottom;
-      if(d<-6 || d>160) return;
-      if(d<bestD){ bestD=d; bestEl=e; }
-    });
-    return bestEl ? (bestEl.innerText||'').trim() : '';
-  }
+  function vp(){ var v=window.visualViewport; return {w:(v&&v.width)||window.innerWidth, h:(v&&v.height)||window.innerHeight}; }
+  function isCand(e){ return e.id && CAND.indexOf(e.id)>=0; }
   function hideOthers(k){
     var n=k;
     while(n && n.parentElement){
       var p=n.parentElement;
       for(var i=0;i<p.children.length;i++){
-        var c=p.children[i]; if(c===n) continue;
+        var c=p.children[i]; if(c===n || isCand(c)) continue;
         var tg=c.tagName; if(tg==='HEAD'||tg==='SCRIPT'||tg==='STYLE'||tg==='LINK'||tg==='META') continue;
-        if(!c.hasAttribute('data-qw-h')) c.setAttribute('data-qw-h', c.style.getPropertyValue('display')||'');
-        c.style.setProperty('display','none','important');
+        if(!c.hasAttribute('data-qw-h')) c.setAttribute('data-qw-h','1');
       }
-      if(p!==document.body && p!==document.documentElement){
-        ['transform','filter','perspective','contain'].forEach(function(x){ p.style.setProperty(x,'none','important'); });
-        p.style.setProperty('background','transparent','important');
-      }
+      if(p!==document.body && p!==document.documentElement){ p.setAttribute('data-qw-p','1'); }
       n=p;
     }
   }
-  function restore(){
-    all('[data-qw-h]').forEach(function(c){ var d=c.getAttribute('data-qw-h'); c.removeAttribute('data-qw-h'); if(d) c.style.setProperty('display',d); else c.style.removeProperty('display'); });
-    if(S.keep){ S.keep.removeAttribute('data-qw-keep'); ['position','left','top','width','height','margin','z-index','transform','transform-origin','background'].forEach(function(x){ S.keep.style.removeProperty(x); }); }
+  function unkeep(){
+    var k=S.keep; if(!k) return;
+    k.removeAttribute('data-qw-keep');
+    ['position','left','top','width','height','margin','z-index','transform','transform-origin','background'].forEach(function(x){ k.style.removeProperty(x); });
     S.keep=null;
   }
   function fit(){
     var k=S.keep; if(!k) return;
-    var W=window.innerWidth, H=window.innerHeight;
-    var s=Math.min(W/S.w, H/S.h), x=(W-S.w*s)/2, y=(H-S.h*s)/2;
+    var V=vp(), s=Math.min(V.w/S.w, V.h/S.h), x=(V.w-S.w*s)/2, y=(V.h-S.h*s)/2;
     k.style.setProperty('transform','translate('+x+'px,'+y+'px) scale('+s+')','important');
   }
-  function iso(k){
-    var r=rect(k); S.w=Math.max(r.width,1); S.h=Math.max(r.height,1);
+  function style(){
     var st=document.getElementById('qw-style');
     if(!st){ st=document.createElement('style'); st.id='qw-style'; (document.head||document.documentElement).appendChild(st); }
-    st.textContent='html,body{background:#000 !important;overflow:hidden !important;}[data-qw-keep] video{object-fit:contain !important;background:#000 !important;}';
-    hideOthers(k);
+    st.textContent='html,body{background:#000 !important;overflow:hidden !important;margin:0 !important;min-width:0 !important;}'
+      +'[data-qw-h]{display:none !important;}'
+      +'[data-qw-p]{transform:none !important;filter:none !important;perspective:none !important;contain:none !important;background:transparent !important;overflow:visible !important;}'
+      +'[data-qw-keep] video{object-fit:contain !important;background:#000 !important;width:100% !important;height:100% !important;}';
+    var m=document.querySelector('meta[name=viewport]');
+    if(!m){ m=document.createElement('meta'); m.name='viewport'; (document.head||document.documentElement).appendChild(m); }
+    m.content='width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no';
+  }
+  function iso(k){
+    unkeep();
+    var r=rect(k); S.w=Math.max(r.width,1); S.h=Math.max(r.height,1);
+    style(); hideOthers(k);
     k.setAttribute('data-qw-keep','1');
     var set=function(a,b){ k.style.setProperty(a,b,'important'); };
     set('position','fixed'); set('left','0'); set('top','0'); set('margin','0');
@@ -127,32 +106,38 @@ object LiveJs {
     set('transform-origin','0 0'); set('background','#000');
     S.keep=k; fit();
   }
+  function checkBlocked(){
+    var t=(document.body&&document.body.innerText)||'';
+    if(/请求已被|安全策略拦截|访问行为存在异常|请稍后重试|统一错误页|内容不见了/.test(t+document.title) && !target()){
+      if(!S.blocked){ S.blocked=true; if(window.QW){ try{QW.onBlocked();}catch(e){} } }
+      return true;
+    }
+    return false;
+  }
   function run(){
     try{
-      if(S.keep && !S.keep.isConnected) restore();
-      if(S.keep){
-        var hasV = S.keep.tagName==='VIDEO' || S.keep.tagName==='IFRAME' || S.keep.querySelector('video,iframe');
-        if(!hasV){
-          var fresh=all('video').filter(function(v){ return !S.keep.contains(v) && !v.__qwSeen; });
-          if(fresh.length){ fresh.forEach(function(v){ v.__qwSeen=true; }); restore(); }
-        }
-      }
-      if(S.keep){ hideOthers(S.keep); fit(); return; }
-      var c=pick(); if(!c) return;
-      all('video').forEach(function(v){ v.__qwSeen=true; });
-      var k=grow(c), t=findTitle(k);
-      iso(k);
-      if(window.QW){ try{ QW.onTitle(t); QW.onIsolated(); }catch(e){} }
+      if(!document.body) return;
+      if(checkBlocked()) return;
+      var t=target(); if(!t) return;
+      if(S.keep!==t){
+        if(!shown(t) && S.keep===null){ /* 等它显示出来 */ }
+        iso(t);
+      } else { hideOthers(t); fit(); }
+      if(!S.reported && window.QW){ S.reported=true; try{ QW.onIsolated(); }catch(e){} }
     }catch(e){}
   }
-  window.__qwIso={run:run};
+  window.__qwIso={run:run, state:S};
   window.__qwFit=fit;
   window.addEventListener('resize', fit);
-  setInterval(run, 1500);
+  if(window.visualViewport) window.visualViewport.addEventListener('resize', fit);
+  setInterval(run, 1000);
   run();
 })();
 """.trimIndent()
 }
+
+private const val DESKTOP_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 @SuppressLint("SetJavaScriptEnabled")
 class LiveScreen(private val a: MainActivity) : Screen {
@@ -163,7 +148,6 @@ class LiveScreen(private val a: MainActivity) : Screen {
     private val capsule = Ui.horizontal(a)
     private val fcTab: TextView
     private val tcTab: TextView
-    private val titleText: TextView
     private val webBox = FrameLayout(a)
     private val loading: TextView
     private val fsButton: TextView
@@ -206,15 +190,6 @@ class LiveScreen(private val a: MainActivity) : Screen {
         refresh.setPadding(dp(24f), dp(14f), dp(24f), dp(14f))
         topBar.addView(refresh, LinearLayout.LayoutParams(-2, -2))
         content.addView(topBar, LinearLayout.LayoutParams(-1, -2))
-
-        // 体彩开奖日期标题（从官方页面取出，单独大字显示）
-        titleText = Ui.text(a, "", 30f, Color.WHITE)
-        titleText.gravity = Gravity.CENTER
-        titleText.setBackgroundColor(Color.BLACK)
-        titleText.setPadding(dp(16f), dp(8f), dp(16f), dp(8f))
-        titleText.maxLines = 1
-        titleText.visibility = View.GONE
-        content.addView(titleText, LinearLayout.LayoutParams(-1, -2))
 
         // ===== 直播画面 =====
         webBox.setBackgroundColor(Color.BLACK)
@@ -291,7 +266,6 @@ class LiveScreen(private val a: MainActivity) : Screen {
         hideCustom()
         gen += 1
         isolated = false
-        titleText.visibility = View.GONE
         val w = web ?: return
         web = null
         try {
@@ -312,16 +286,15 @@ class LiveScreen(private val a: MainActivity) : Screen {
         webBox.addView(w, 0, FrameLayout.LayoutParams(-1, -1))
         web = w
         w.loadUrl(if (showingFc) LiveConfig.FC_URL else LiveConfig.TC_URL)
-        // 页面较慢时，多次尝试识别直播画面
-        for (t in longArrayOf(2000, 4000, 6000, 9000, 12000)) {
+        // 页面较慢时，多次尝试识别直播画面（只在本机执行，不会多访问官网）
+        for (t in longArrayOf(1500, 3000, 5000, 8000, 12000)) {
             handler.postDelayed({ if (g == gen) inject(w) }, t)
         }
         handler.postDelayed({
             if (g == gen && !isolated) {
-                loading.visibility = View.GONE
-                Toast.makeText(a, "没有识别到直播画面，先显示官方完整页面", Toast.LENGTH_LONG).show()
+                loading.text = "直播画面还没打开\n请检查网络后点右上角“⟳ 刷新”"
             }
-        }, 15000)
+        }, 20000)
     }
 
     private fun inject(w: WebView) {
@@ -345,12 +318,13 @@ class LiveScreen(private val a: MainActivity) : Screen {
         }
 
         @JavascriptInterface
-        fun onTitle(t: String?) {
+        fun onBlocked() {
             handler.post {
                 if (g == gen) {
-                    val s = (t ?: "").trim().take(40)
-                    titleText.text = s
-                    titleText.visibility = if (s.isEmpty() || fullscreen) View.GONE else View.VISIBLE
+                    loading.text = "官网暂时拦截了访问\n请过几分钟再点右上角“⟳ 刷新”"
+                    loading.visibility = View.VISIBLE
+                    loading.bringToFront()
+                    fsButton.bringToFront()
                 }
             }
         }
@@ -367,6 +341,8 @@ class LiveScreen(private val a: MainActivity) : Screen {
         s.setSupportZoom(false)
         s.builtInZoomControls = false
         s.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        // 使用电脑版页面：结构固定，已实测能准确找到直播画面
+        s.userAgentString = DESKTOP_UA
         w.addJavascriptInterface(Bridge(g), "QW")
         w.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -435,7 +411,6 @@ class LiveScreen(private val a: MainActivity) : Screen {
     private fun setFullscreen(on: Boolean) {
         fullscreen = on
         topBar.visibility = if (on) View.GONE else View.VISIBLE
-        titleText.visibility = if (on || titleText.text.isNullOrEmpty()) View.GONE else View.VISIBLE
         fsButton.text = if (on) "退出全屏" else "⛶ 全屏"
         fsButton.alpha = if (on) 0.75f else 1f
         setSystemBars(!on)
