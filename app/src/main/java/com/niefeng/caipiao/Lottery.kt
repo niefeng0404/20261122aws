@@ -91,4 +91,31 @@ object Clock {
     }
 
     fun year(): Int = Calendar.getInstance(tz).get(Calendar.YEAR)
+
+    /** 解析 "2026-11-21 21:16:46"（北京时间），无效返回 null */
+    fun parse(s: String?): Long? {
+        if (s.isNullOrBlank() || s.startsWith("0000")) return null
+        return try {
+            val f = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
+            f.timeZone = tz
+            f.isLenient = false
+            f.parse(s)?.time
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** 例如 "11月21日 21:16:46" */
+    fun fmtFull(ms: Long): String {
+        val f = SimpleDateFormat("M月d日 HH:mm:ss", Locale.CHINA)
+        f.timeZone = tz
+        return f.format(Date(ms))
+    }
+
+    /** 例如 "21:15" */
+    fun fmtHm(ms: Long): String {
+        val f = SimpleDateFormat("HH:mm", Locale.CHINA)
+        f.timeZone = tz
+        return f.format(Date(ms))
+    }
 }
